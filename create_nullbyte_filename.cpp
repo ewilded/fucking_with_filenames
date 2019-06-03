@@ -21,9 +21,6 @@
 #include <string.h>
 #include <iostream>
 
-#define HIDDEN_KEY_LENGTH 10
-
-
 // We are going to have to locally define some of the known data structures and types in order to build the arguments expected by the native function calls
 // as well as to be able to dynamically link those native function calls with use of LoadLibraryA() and GetProcAddress().
 
@@ -37,21 +34,7 @@ typedef struct _UNICODE_STRING {
 // The NtCreateFile() function we want to abuse to create arbitrary file names - we need these types for our typedef for dynamic linking:
 /*
 // https://docs.microsoft.com/en-us/windows/desktop/api/winternl/nf-winternl-ntcreatefile
-__kernel_entry NTSTATUS NtCreateFile(
-  OUT PHANDLE           FileHandle,
-  IN ACCESS_MASK        DesiredAccess,
-  IN POBJECT_ATTRIBUTES ObjectAttributes,
-  OUT PIO_STATUS_BLOCK  IoStatusBlock,
-  IN PLARGE_INTEGER     AllocationSize,
-  IN ULONG              FileAttributes,
-  IN ULONG              ShareAccess,
-  IN ULONG              CreateDisposition,
-  IN ULONG              CreateOptions,
-  IN PVOID              EaBuffer,
-  IN ULONG              EaLength
-);
 */
-
 // And now some of the data structure types used by the NtCreateFile() function:
 // POBJECT_ATTRIBUTES - this is the structure pointing at the filename as well as the root directory handle of the new file
 // https://msdn.microsoft.com/en-us/windows/ff557749(v=vs.90)
@@ -110,86 +93,65 @@ void createHiddenFile()
 	}
 	
 	// 3. Preapre the OBJECT_ATTRIBUTES structure
-	
-	// 4. Delare the PIO_STATUS_BLOCK (it's an output parameter, so we don't have to initialize it)
-	
-	// 5. Call the function and see the magic happen!
-	
-	/*
-	wchar_t runkeyPath[0x100] = L"hacky";
 
-	wchar_t runkeyPath_trick[0x100] = L"\0\0EVILTEST";  // uncomment for the 'hidden' value
 
-	ValueName.Buffer = runkeyPath_trick;
-	ValueName.Length = 2 * HIDDEN_KEY_LENGTH;
-	ValueName.MaximumLength = 0;
-	//const WCHAR* directory="test";
 	
-	//LSTATUS openRet = 0;
-	//NTSTATUS setRet = 0;
-	//HKEY hkResult = NULL;
-	//UNICODE_STRING ValueName = { 0 };
+	
+	wchar_t filename[20]=L"evil1.txt"; // 9 chars first, for testing purposes, we use normal, benign filename without any funny characters in it
+	
+	UNICODE_STRING evil_filename;
+	evil_filename.Buffer = filename;
 
-	// get the NtSetValueKey Native function address
-	if (!(openRet = RegOpenKeyExW(HKEY_CURRENT_USER, runkeyPath, 0, KEY_SET_VALUE, &hkResult)))
-	{
-		if (!(setRet = NtSetValueKey(hkResult, &ValueName, 0, REG_SZ, (PVOID)runCmd, wcslen(runCmd) * 2)))
-		{
-			printf("SUCCESS setting hidden run value!\n");
-		}
-		else
-		{
-			printf("FAILURE setting hidden run value! (setRet == 0x%X, GLE() == %d)\n", setRet, GetLastError());
-		}
-		RegCloseKey(hkResult);
-	}
-	else
-
-	{
-		printf("FAILURE opening RUN key in registry! (openRet == 0x%X, GLE() == %d)\n", openRet, GetLastError());
-	}
-	*/
-}
+	OBJECT_ATTRIBUTES attrs;
+	// we are supposed to initialize this with the InitializeObjectAttributes() macro, which most likely resides in wdm.h, let's try getting around this
+	attrs.RootDirectory=directory;	
+	attrs.ObjectName=&evil_filename;
+	attrs.SecurityDescriptor=NULL;
+	attrs.SecurityQualityOfService=NULL;
+	attrs.Attributes=0; // no flags here
+	attrs.Length=sizeof(OBJECT_ATTRIBUTES);
+	
+	LARGE_INTEGER large_int  = { 4096 }; // AllocationSize
+	
+	PIO_STATUS_BLOCK pio_status_block; // Delare the PIO_STATUS_BLOCK (it's an output parameter, so we don't have to initialize it)	
+	// on return, if the call was successful, this should contain FILE_CREATED (I guess in the status field)
+	PHANDLE out_handle; // the output param of the routine; the new handle to the freshly created file
+	
+	// 5. Call the function and see what happens
 /*
-void deleteHiddenKey()
-{
-	LSTATUS openRet = 0;
-	NTSTATUS delRet = 0;
-	HKEY hkResult = NULL;
-	UNICODE_STRING ValueName = { 0 };
+// https://docs.microsoft.com/en-us/windows/desktop/api/winternl/nf-winternl-ntcreatefile
+	__kernel_entry NTSTATUS NtCreateFile(
+  OUT PHANDLE           FileHandle,
+  IN ACCESS_MASK        DesiredAccess,
+  IN POBJECT_ATTRIBUTES ObjectAttributes,
+  OUT PIO_STATUS_BLOCK  IoStatusBlock,
+  IN PLARGE_INTEGER     AllocationSize,
+  IN ULONG              FileAttributes,
+  IN ULONG              ShareAccess,
+  IN ULONG              CreateDisposition,
+  IN ULONG              CreateOptions,
+  IN PVOID              EaBuffer,
+  IN ULONG              EaLength
+);*/
 
-	// get the NtSetValueKey Native function address
-	HMODULE hNtdll = LoadLibraryA("ntdll.dll");
-	_NtDeleteValueKey NtDeleteValueKey;
-	NtDeleteValueKey=(_NtDeleteValueKey)GetProcAddress(hNtdll,"NtDeleteValueKey");
-	
-
-	wchar_t runkeyPath[0x100] = L"hacky";
-	wchar_t runkeyPath_trick[0x100] = L"\0\0EVILTEST";  // uncomment for the 'hidden' value
-
-	ValueName.Buffer = runkeyPath_trick;
-	ValueName.Length = 2 * HIDDEN_KEY_LENGTH;
-	ValueName.MaximumLength = 0;
-
-	if (!(openRet = RegOpenKeyExW(HKEY_CURRENT_USER, runkeyPath, 0, KEY_ALL_ACCESS, &hkResult)))
+// for some reason Dev does not recognize NTSTATUS values here (e.g. STATUS_SUCCESS). Why?
+	NTSTATUS result = NtCreateFile(out_handle, FILE_WRITE_DATA, &attrs, pio_status_block, &large_int , FILE_ATTRIBUTE_NORMAL, 0, FILE_CREATE, FILE_NON_DIRECTORY_FILE, NULL, 0);
+	if(result==0)
 	{
-			// OK this won't work without using a Marshalling technique (to be able to call native system functions from managed code)
-		if (!(delRet = NtDeleteValueKey(hkResult, &ValueName)))
-		{
-			printf("SUCCESS removing the fucking nullbyte key run value!\n");
-		}
-		else
-		{
-			printf("FAILURE removing the fucking nullbyte run value! (delRet == 0x%X, GetLastError() == %d)\n", delRet, GetLastError());
-		}
-		RegCloseKey(hkResult);
+		printf("File was successfully created using the native NtCreateFile() call!\n");
 	}
 	else
 	{
-		printf("FAILURE opening RUN key in registry! (openRet == 0x%X, GLE() == %d)\n", openRet, GetLastError());
+		printf("We're doing it wrong: %x\n", result);
+		// OK, so currently it returns 0xc0000005, which means ACCESS_VIOLATION
+		// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-erref/596a1078-e883-4972-9bbc-49e60bebca55
+		// Mhm:
+		// Callers of NtCreateFile must be running at IRQL = PASSIVE_LEVEL and with special kernel APCs enabled.
+		// So, maybe, just maybe, this function is not supposed to be called from User Mode.
 	}
+	
 }
-*/
+
 
 int main(int argc, char** argv) 
 {
